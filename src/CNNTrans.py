@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# partially adapted from https://github.com/XinhaoMei/DCASE2021_task6_v2.git by Xinhao Mei
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+from torch.nn import TransformerEncoder, TransformerEncoderLayer, \
+    TransformerDecoder, TransformerDecoderLayer
+from .Encoder import Cnn10, Cnn14, ResNet38
+from lib.file_io import load_pickle_file
+from lib.model_utils import align_word_embedding
+from .net_vlad import NetVLAD
+
+
+def init_layer(layer):
+    """Initialize a Linear or Convolutional layer. """
+    nn.init.xavier_uniform_(layer.weight)
+    if hasattr(layer, 'bias'):
+        if layer.bias is not None:
+            layer.bias.data.fill_(0.)
+
+
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=2000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        r"""Inputs of forward function
+        Args:
+            x: the sequence fed to the positional audio_encoder model (required).
+        Shape:
+            x: [sequence length, batch size, embed dim]
+            output: [sequence length, batch size, embed dim]
+        """
+
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
+
+class TransformerModel(nn.Module):
+    """ Container module with an Cnn audio_encoder and a Transformer decoder."""
+
+    def __init__(self, config):
+        super(TransformerModel, self).__init__()
+        self.model_type = 'Cnn+Transformer'
+
+        self.is_keywords = config.keywords
+
+        vocabulary = load_pickle_file(config.path.vocabulary.format(config.dataset))
+        ntoken = len(vocabulary)
+
+        # setting for CNN
+        if config.encoder.model == 'Cnn10':
+            self.feature_extractor = Cnn10(config)
+        elif config.encoder.model == 'Cnn14':
+            self.feature_extractor = Cnn14(config)
+        elif config.encoder.model == 'ResNet38':
+            self.feature_extractor = ResNet38(config)
+        else:
+            raise NameError('No such encoder model')
+
+        if config.encoder.pretrained:
+            pretrained_cnn = torch.load('pretrained_models/audio_encoder/{}.pth'.
+                                        format(config.encoder.model))['model']
+            dict_new = self.feature_extractor.state_dict().copy()
+            trained_list = [i for i in pretrained_cnn.keys()
+                            if not ('fc' in i or i.startswith('spec') or i.startswith('logmel'))]
+            for i in range(len(trained_list)):
+                dict_new[trained_list[i]] = pretrained_cnn[trained_list[i]]
+            self.feature_extractor.load_state_dict(dict_new)
+        if config.encoder.freeze:
+            for name, p in self.feature_extractor.named_parameters():
+                if 'fc' not in name:
+                    p.requires_grad = False
+
+        # decoder settings
+        self.decoder_only = config.decoder.decoder_only
+        nhead = config.decoder.nhead  # number of heads in Transformer
+        self.nhid = config.decoder.nhid  # number of expected features in decoder inputs
+        nlayers = config.decoder.nlayers  # number of sub-decoder-layer in the decoder
+        dim_feedforward = config.decoder.dim_feedforward  # dimension of the feedforward model
+        activation = config.decoder.activation  # activation function of decoder intermediate layer
+        dropout = config.decoder.dropout  # the dropout value
+
+        self.pos_encoder = PositionalEncoding(self.nhid, dropout)
+
+        if not self.decoder_only:
+            ''' Including transfomer audio_encoder '''
+            encoder_layers = TransformerEncoderLayer(self.nhid,
+                                                     8,
+                                                     dim_feedforward,
+                                                     dropout,
+                                                     activation)
+            self.transformer_encoder = TransformerEncoder(encoder_layers, 6)
+
+        decoder_layers = TransformerDecoderLayer(self.nhid,
+                                                 nhead,
+                                                 dim_feedforward,
+                                                 dropout,
+                                                 activation)
+        self.transformer_decoder = TransformerDecoder(decoder_layers, nlayers)
+
+        # linear layers
+        self.audio_linear = nn.Linear(1024, self.nhid, bias=True)
+        self.dec_fc = nn.Linear(self.nhid, ntoken)
+        self.generator = nn.Softmax(dim=-1)
+        self.word_emb = nn.Embedding(ntoken, self.nhid)
+
+        self.init_weights()
+
+        # setting for pretrained word embedding
+        if config.word_embedding.freeze:
+            self.word_emb.weight.requires_grad = False
+        if config.word_embedding.pretrained:
+            self.word_emb.weight.data = align_word_embedding(config.path.vocabulary.format(config.dataset),
+                                                             config.path.word2vec, config.decoder.nhid)
+
+        self.bert_pretrain = config.bert_pretrain
+
+        if self.bert_pretrain:
+            for name, p in self.feature_extractor.named_parameters():
+                p.requires_grad = False
+
+    def init_weights(self):
+        # initrange = 0.1
+        # self.word_emb.weight.data.uniform_(-initrange, initrange)
+        init_layer(self.audio_linear)
+        # init_layer(self.dec_fc)
+
+    def generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def encode(self, src):
+
+        src = self.feature_extractor(src)  # (time, batch, feature)
+        src = F.relu_(self.audio_linear(src))
+        src = F.dropout(src, p=0.2, training=self.training)
+
+        if not self.decoder_only:
+            src = src * math.sqrt(self.nhid)
+            src = self.pos_encoder(src)
+            src = self.transformer_encoder(src, None)
+
+        return src
+
+    def decode(self, mem, tgt, keyword=None, input_mask=None, target_mask=None, target_padding_mask=None):
+        # tgt:(batch_size, T_out)
+        # mem:(T_mem, batch_size, nhid)
+
+        tgt = tgt.transpose(0, 1)
+        if target_mask is None or target_mask.size()[0] != len(tgt):
+            device = tgt.device
+            target_mask = self.generate_square_subsequent_mask(len(tgt)).to(device) # (T_out, T_out)
+
+        if keyword is not None and self.is_keywords:
+            keyword = self.word_emb(keyword) # (batch_size, L_keyword, nhid)
+            keyword = keyword.transpose(0, 1) # (L_keyword, batch_size, nhid)
+            mem = torch.cat((mem, keyword), dim=0) # (T_mem+L_keyword, batch_size, nhid)
+
+        tgt = self.word_emb(tgt) * math.sqrt(self.nhid) # (T_out, batch_size, nhid) word embedding scaled before adding positional encoding
+
+        tgt = self.pos_encoder(tgt)
+        output = self.transformer_decoder(tgt, mem,
+                                          memory_mask=input_mask,
+                                          tgt_mask=target_mask,
+                                          tgt_key_padding_mask=target_padding_mask)
+        output = self.dec_fc(output)
+
+        return output
+
+    def forward(self, src, tgt, keyword=None, input_mask=None, target_mask=None, target_padding_mask=None):
+
+        mem = self.encode(src)
+        output = self.decode(mem, tgt, keyword=keyword,
+                             input_mask=input_mask,
+                             target_mask=target_mask,
+                             target_padding_mask=target_padding_mask)
+        return output

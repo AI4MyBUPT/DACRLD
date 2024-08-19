@@ -1,0 +1,53 @@
+mode: 'train'
+exp_name: 't4_beats_tf3ly_cls_norm924_distilbert'
+dataset: 'Clotho' # AudioCaps
+text_encoder: 'bert_embinput'
+joint_embed: 1024
+# bart data
+# put the trained diffusion model in diffusion_state_dict_path
+diffusion_state_dict_path: '../pretrained_models/ase_embinput/clotho/ase_mean_scale.pkl'
+bart_max_seq_len: 33
+input_embedding_dim: 768
+use_norm_bart_latents: Yes
+# BEATs feat path
+audio_features_path: 'data/Clotho/features/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt1/all_feats_{split}.pkl'
+
+wav:
+  sr: 32000 
+  window_size: 1024
+  hop_length: 320
+  mel_bins: 64
+
+bert_encoder:
+  type: 'pretrained_models/distilbert-base-uncased'
+  freeze: No
+
+cnn_encoder:
+  model: 'Extracted+TF'
+  TF_dim: 768
+  audio_feat_extract_dim: 768
+  transformer_src_encoder_layers: 3
+  pretrained: No
+  freeze: No
+
+data:
+  batch_size: 22
+  num_workers: 8
+
+training:
+  margin: 0.2
+  freeze: No
+  loss: ntxent  # 'triplet' (TripletLoss), 'weight' (WeightTriplet), 'ntxent', 'contrastive' (BiDirectionalRankingLoss)
+  spec_augmentation: Yes
+  epochs: 50
+  lr: !!float 1e-5
+  clip_grad: 2
+  seed: 20
+  resume: No
+  l2_norm: Yes
+  dropout: 0.2
+
+path:
+  vocabulary: 'data/{}/pickles/words_list.p'
+  word2vec: 'pretrained_models/w2v_all_vocabulary.model'
+  resume_model: ''

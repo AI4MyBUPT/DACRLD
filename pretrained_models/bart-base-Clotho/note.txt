@@ -1,0 +1,1 @@
+vocab_list and vocab_banned_list are derived from the Clotho training set
