@@ -8,13 +8,13 @@ This is the official code for paper Diffusion-based Diverse Audio Captioning wit
 Details of the python environment we use can be found in ``requirements.txt``.
 
 ## Data preparation
-- Download AudioCaps and Clotho audio files and put them in ``data/{dataset_name}/waveforms/{split}``. The datasets can be downloaded from [https://github.com/XinhaoMei/audio-text_retrieval]().
-- Make the hdfs files according to ``data_prep.py`` in [https://github.com/XinhaoMei/DCASE2021_task6_v2]().
+- Download AudioCaps and Clotho audio files and put them in ``data/{dataset_name}/waveforms/{split}``. The datasets can be downloaded from [https://github.com/XinhaoMei/audio-text_retrieval](https://github.com/XinhaoMei/audio-text_retrieval).
+- Make the hdfs files according to ``data_prep.py`` in [https://github.com/XinhaoMei/DCASE2021_task6_v2](https://github.com/XinhaoMei/DCASE2021_task6_v2).
 - Extract features with the [BEATs](https://github.com/microsoft/unilm/tree/master/beats) model. Download the codebase and use the script in ``tools/{dataset}_feat_pkl.py``.
 - Pack the extracted features with ``tools/{dataset}_feat_h5.py`` and put them to ``data/{dataset}/features/``.
 
 ## Evaluation tool preparation
-- Put dir ``coco_caption`` from [https://github.com/audio-captioning/caption-evaluation-tools/]() into the project root dir.
+- Put dir ``coco_caption`` from [https://github.com/audio-captioning/caption-evaluation-tools/](https://github.com/audio-captioning/caption-evaluation-tools/) into the project root dir.
 - Use ``coco_caption/get_stanford_models.sh`` to download the required packages for caption evaluation.
 
 ## Model preparation
