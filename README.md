@@ -14,7 +14,7 @@ Details of the python environment we use can be found in ``requirements.txt``.
 - Pack the extracted features with ``tools/{dataset}_feat_h5.py`` and put them to ``data/{dataset}/features/``.
 
 ## Evaluation tool preparation
-- Put dir ``coco_caption`` from [https://github.com/audio-captioning/caption-evaluation-tools/](https://github.com/audio-captioning/caption-evaluation-tools/) into the project root dir.
+- Put dir ``coco_caption`` from [https://github.com/audio-captioning/caption-evaluation-tools](https://github.com/audio-captioning/caption-evaluation-tools) into the project root dir.
 - Use ``coco_caption/get_stanford_models.sh`` to download the required packages for caption evaluation.
 
 ## Model preparation
